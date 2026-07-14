@@ -13,19 +13,11 @@ def render() -> None:
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
 
-    enable_password = ""
-    if vendor == "cisco":
-        enable_password = st.text_input(
-            "Enable Password",
-            type="password",
-            help="Privileged EXEC (enable) secret — required to pull the full running-config on Cisco devices.",
-        )
-
     if st.button("Connect and Collect Config"):
         try:
             with st.spinner(f"Connecting to {host}..."):
                 if vendor == "cisco":
-                    config_text = cisco.collect(host, username, password, enable_password)
+                    config_text = cisco.collect(host, username, password)
                 elif vendor == "junos":
                     config_text = junos.collect(host, username, password)
                 else:

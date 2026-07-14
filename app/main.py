@@ -23,6 +23,8 @@ def init_session_state() -> None:
         "connected_vendor": None,   # "pfsense" | "cisco" | "junos"
         "connected_host": None,     # for display only
         "results": [],              # list of verdict dicts from Stage 3
+        "batch_id": None,           # OpenAI Batch API job id, Stage 3
+        "run_id": None,             # results/<run_id> folder for the current run, Stage 4
     }
     for key, value in defaults.items():
         if key not in st.session_state:
