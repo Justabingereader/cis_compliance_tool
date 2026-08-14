@@ -16,6 +16,9 @@ from stage2_benchmarks.loader import load_controls
 from stage3_llm_eval.prompts import SYSTEM_PROMPT, build_user_prompt
 
 MODEL = "gpt-5.6-terra"
+# gpt-5.6-terra rejects a custom temperature (fixed at the default, 1), so
+# seed is the only determinism lever available for reproducible verdicts.
+SEED = 42
 
 _client = OpenAI(api_key=config.OPENAI_API_KEY)
 
@@ -50,7 +53,7 @@ def submit_batch(vendor: str, config_text: str) -> str:
                     {"role": "user", "content": build_user_prompt(config_text, control)},
                 ],
                 "response_format": VERDICT_SCHEMA,
-                "temperature": 0,
+                "seed": SEED,
             }
             line = {
                 "custom_id": control["control_id"],
@@ -91,8 +94,26 @@ def check_batch_status(batch_id: str) -> dict:
 def retrieve_results(batch_id: str) -> list[dict]:
     """Fetch and parse a completed batch's results into verdict dicts."""
     batch = _client.batches.retrieve(batch_id)
-    if batch.status != "completed" or not batch.output_file_id:
+    if batch.status != "completed":
         raise RuntimeError(f"Batch {batch_id} is not completed yet (status={batch.status}).")
+
+    if not batch.output_file_id:
+        # Completed with zero successful requests — every request failed
+        # server-side (e.g. OpenAI rejecting the batch with 401/403). Surface
+        # the actual reason instead of the misleading "not completed yet".
+        counts = batch.request_counts
+        detail = ""
+        if batch.error_file_id:
+            error_content = _client.files.content(batch.error_file_id).text
+            first_line = next((l for l in error_content.splitlines() if l.strip()), None)
+            if first_line:
+                reason = json.loads(first_line)["response"]["body"]["error"]["message"]
+                detail = f" OpenAI error: {reason}"
+        raise RuntimeError(
+            f"Batch {batch_id} completed with no successful requests "
+            f"({counts.failed if counts else '?'}/{counts.total if counts else '?'} failed)."
+            f"{detail}"
+        )
 
     vendor = batch.metadata.get("vendor") if batch.metadata else None
     automated_by_id = {c["control_id"]: c["automated"] for c in load_controls(vendor)} if vendor else {}

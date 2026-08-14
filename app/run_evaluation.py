@@ -1,19 +1,59 @@
 """Run Evaluation panel. Submits and tracks a Stage 3 OpenAI Batch API job."""
 
+import time
+
 import streamlit as st
 
 from stage3_llm_eval import evaluate
 from stage4_report import report
 
+_SYNC_INTERVAL_SECONDS = 15
+
+
+def sync_pending_runs(force: bool = False) -> int:
+    """Poll every locally-pending run against OpenAI and save results for any
+    that have completed, so a batch finishing doesn't require someone to
+    manually click "Check Status" — used by both this page and History.
+    Debounced per session (unless force=True) so a page with several pending
+    runs doesn't re-hit the API on every widget interaction/rerun."""
+    last_synced = st.session_state.get("_last_pending_sync", 0.0)
+    if not force and time.time() - last_synced < _SYNC_INTERVAL_SECONDS:
+        return 0
+    st.session_state["_last_pending_sync"] = time.time()
+
+    newly_completed = 0
+    for run in report.list_runs():
+        if run["status"] != "pending":
+            continue
+        try:
+            status = evaluate.check_batch_status(run["batch_id"])
+        except Exception:
+            continue
+        if status["status"] != "completed":
+            continue
+        try:
+            results = evaluate.retrieve_results(run["batch_id"])
+        except Exception:
+            continue
+        report.save_results(run["run_id"], results)
+        newly_completed += 1
+    return newly_completed
+
 
 def render() -> None:
     st.header("Run Evaluation")
+
+    if sync_pending_runs():
+        st.toast("A pending batch finished and was saved.", icon="✅")
 
     if st.session_state.config_text is None:
         st.info("Connect a device first — no config loaded.")
         return
 
     st.write(f"Config loaded from: {st.session_state.connected_host}")
+
+    if st.session_state.run_id and not st.session_state.results:
+        st.session_state.results = report.get_results(st.session_state.run_id)
 
     if st.session_state.batch_id is None:
         if st.button("Submit Evaluation Batch"):
@@ -30,6 +70,7 @@ def render() -> None:
                 st.session_state.batch_id = batch_id
                 st.session_state.run_id = run_id
                 st.success(f"Batch submitted: {batch_id}")
+                st.rerun()
         return
 
     st.write(f"Batch ID: `{st.session_state.batch_id}`")
@@ -63,3 +104,4 @@ def render() -> None:
         st.session_state.batch_id = None
         st.session_state.run_id = None
         st.session_state.results = []
+        st.rerun()
